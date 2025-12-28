@@ -14,24 +14,43 @@ def _notebook_run(path):
     """Execute a notebook via nbconvert and collect output.
        :returns (parsed nb object, execution errors)
     """
-    dirname, __ = os.path.split(path)
+    dirname, basename = os.path.split(path)
+    original_dir = os.getcwd()
     if len(dirname) > 0:
         os.chdir(dirname)
-    with tempfile.NamedTemporaryFile(suffix=".ipynb", mode='w+') as fout:
-        args = ["jupyter-nbconvert", "--to", "notebook", "--execute",
+        notebook_path = basename
+    else:
+        notebook_path = path
+    
+    # On Windows, NamedTemporaryFile locks the file, so we create a temp file path
+    # in the same directory as the notebook so nbconvert can write to it
+    fd, temp_path = tempfile.mkstemp(suffix=".ipynb", dir=dirname if dirname else None)
+    os.close(fd)  # Close the file descriptor so nbconvert can write to it
+    temp_basename = os.path.basename(temp_path)
+    try:
+        args = ["python", "-m", "nbconvert", "--to", "notebook", "--execute",
                 "--allow-errors",
                 "--ExecutePreprocessor.timeout=60",
-                "--output", fout.name, path]
+                "--output", temp_basename, notebook_path]
         subprocess.check_call(args, stderr=True)
 
-        fout.seek(0)
-        nb = nbformat.read(fout, nbformat.current_nbformat)
+        # Read the executed notebook
+        with open(temp_path, 'r', encoding='utf-8') as f:
+            nb = nbformat.read(f, nbformat.current_nbformat)
 
-    errors = [output for cell in nb.cells if "outputs" in cell
-              for output in cell["outputs"] \
-              if output.output_type == "error"]
+        errors = [output for cell in nb.cells if "outputs" in cell
+                  for output in cell["outputs"] \
+                  if output.output_type == "error"]
 
-    return nb, errors
+        return nb, errors
+    finally:
+        # Clean up the temporary file
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+        # Restore original directory
+        os.chdir(original_dir)
 
 
 def check_errors(file_name, expected: List[str], actual: List[Any]) -> bool:
